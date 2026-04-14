@@ -1,0 +1,9 @@
+{
+  "projects": [
+    {
+      "name": "My Project",
+      "path": "/absolute/path/to/your/project"
+    }
+  ],
+  "active": "/absolute/path/to/your/project"
+}

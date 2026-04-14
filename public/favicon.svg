@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="6" fill="#0d0d0f"/>
+  <rect x="1" y="1" width="30" height="30" rx="5" fill="none" stroke="#24242a" stroke-width="1"/>
+  <!-- prompt cursor $ _ -->
+  <text x="6" y="22" font-family="ui-monospace, Menlo, monospace" font-size="16" font-weight="700" fill="#7aa2f7">$</text>
+  <rect x="19" y="18" width="7" height="2.5" fill="#d8d8dc">
+    <animate attributeName="opacity" values="1;0;1" dur="1.1s" repeatCount="indefinite"/>
+  </rect>
+</svg>
