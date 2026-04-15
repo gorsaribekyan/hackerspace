@@ -716,7 +716,7 @@ function sendCommand(id, text, model, mode, images, label) {
   else if (effectiveMode === 'plan') args.push('--permission-mode', 'plan');
 
   if (agent._allowedTools && agent._allowedTools.size > 0 && effectiveMode !== 'bypass') {
-    args.push('--allowed-tools', ...agent._allowedTools);
+    args.push('--allowed-tools', Array.from(agent._allowedTools).join(','));
   }
   if (agent._tempBypass) agent._tempBypass = false;
   if (agent.sessionId) args.push('--resume', agent.sessionId);
@@ -978,8 +978,11 @@ wss.on('connection', (ws) => {
           a._allowedTools.add(msg.tool_name);
           if (a.process) { killProc(a.process.pid); a.process = null; }
           const lastCmd = a._lastCmd;
+          const grantMsg = `[Permission granted: ${msg.tool_name}]`;
+          bufferPush(a, { text: grantMsg, cls: 'term-system', ts: Date.now() });
+          broadcast({ type: 'agent_output', id: msg.id, text: grantMsg, done: false, format: 'system' });
           if (lastCmd && a.sessionId) {
-            sendCommand(msg.id, `The ${msg.tool_name} tool has been approved. Please retry your previous action.`, lastCmd.model, lastCmd.mode, null, null);
+            sendCommand(msg.id, lastCmd.text, lastCmd.model, lastCmd.mode, null, null);
           }
         }
         break;
@@ -990,8 +993,11 @@ wss.on('connection', (ws) => {
           a._tempBypass = true;
           if (a.process) { killProc(a.process.pid); a.process = null; }
           const lastCmd = a._lastCmd;
+          const grantMsg = '[Permission granted: all tools]';
+          bufferPush(a, { text: grantMsg, cls: 'term-system', ts: Date.now() });
+          broadcast({ type: 'agent_output', id: msg.id, text: grantMsg, done: false, format: 'system' });
           if (lastCmd && a.sessionId) {
-            sendCommand(msg.id, 'All tool permissions have been granted. Please retry your previous action.', lastCmd.model, lastCmd.mode, null, null);
+            sendCommand(msg.id, lastCmd.text, lastCmd.model, lastCmd.mode, null, null);
           }
         }
         break;

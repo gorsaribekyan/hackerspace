@@ -1342,6 +1342,7 @@ function defaultAgentState() {
     messageCount: 0,
     sessionId: null,
     devServer: { status: 'off', port: null },
+    pendingPermission: false,
   };
 }
 function getAgent(id) {
@@ -1615,9 +1616,11 @@ function handleWSMessage(msg) {
         `<div class="perm-btns" data-perm="${permId}">` +
         `<button class="perm-btn perm-allow" onclick="permissionAllow(${msg.id}, '${safe}', '${permId}')">ALLOW</button>` +
         `<button class="perm-btn perm-allow-all" onclick="permissionAllowAll(${msg.id}, '${permId}')">ALLOW ALL</button>` +
-        `<button class="perm-btn perm-deny" onclick="permissionDeny('${permId}')">DENY</button>` +
+        `<button class="perm-btn perm-deny" onclick="permissionDeny(${msg.id}, '${permId}')">DENY</button>` +
         `</div>`;
       pushLine(msg.id, html, 'term-permission', Date.now(), true);
+      getAgent(msg.id).pendingPermission = true;
+      if (msg.id === selectedTabId) updateStatusBar();
       break;
     }
     case 'agent_error': {
@@ -2932,7 +2935,7 @@ function updateStatusBar() {
 
 
   const stopBtn = document.getElementById('stop-btn');
-  stopBtn.disabled = s.status !== 'working';
+  stopBtn.disabled = s.status !== 'working' && !s.pendingPermission;
 
   updateContextBar();
   updateLimitBar();
@@ -3221,6 +3224,14 @@ function stopAgent() {
   if (selectedTabId === null) return;
   const s = getAgent(selectedTabId);
   if (s.status === 'working') wsSend({ type: 'stop', id: selectedTabId });
+  if (s.pendingPermission) {
+    document.querySelectorAll('.term-permission:not(.perm-resolved)').forEach(el => {
+      el.classList.add('perm-resolved');
+      el.querySelectorAll('button').forEach(b => b.disabled = true);
+    });
+    s.pendingPermission = false;
+    updateStatusBar();
+  }
 }
 
 function initAgent() {
@@ -3252,19 +3263,24 @@ async function clearAgent() {
 
 function permissionAllow(id, tool, permId) {
   wsSend({ type: 'permission_allow', id, tool_name: tool });
-  markPermResolved(permId);
+  markPermResolved(id, permId);
 }
 function permissionAllowAll(id, permId) {
   wsSend({ type: 'permission_allow_all', id });
-  markPermResolved(permId);
+  markPermResolved(id, permId);
 }
-function permissionDeny(permId) { markPermResolved(permId); }
+function permissionDeny(id, permId) { markPermResolved(id, permId); }
 
-function markPermResolved(permId) {
+function markPermResolved(id, permId) {
   document.querySelectorAll(`[data-perm="${permId}"]`).forEach(el => {
     el.closest('.term-line').classList.add('perm-resolved');
     el.querySelectorAll('button').forEach(b => b.disabled = true);
   });
+  const s = getAgent(id);
+  if (!document.querySelector('.term-permission:not(.perm-resolved)')) {
+    s.pendingPermission = false;
+    if (id === selectedTabId) updateStatusBar();
+  }
 }
 
 // MODALS
