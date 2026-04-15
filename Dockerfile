@@ -12,6 +12,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
+        openssh-client \
         build-essential \
         python3 \
         fish \
