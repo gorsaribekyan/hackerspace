@@ -4,7 +4,8 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive \
     HOST=0.0.0.0 \
     PORT=3000 \
-    SHELL=/usr/bin/fish
+    SHELL=/usr/bin/fish \
+    IS_SANDBOX=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
