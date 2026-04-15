@@ -32,6 +32,65 @@ if (!fs.existsSync(currentRoot) || !fs.statSync(currentRoot).isDirectory()) {
 function hackspaceDir(root) { return path.join(root, '.hackerspace'); }
 function configFile(root) { return path.join(hackspaceDir(root), 'config.json'); }
 const crypto = require('crypto');
+
+// --- Simple session auth ---
+const LOGIN_USER = process.env.LOGIN_USER || '';
+const LOGIN_PASS = process.env.LOGIN_PASS || '';
+const AUTH_ENABLED = !!(LOGIN_USER && LOGIN_PASS);
+const activeSessions = new Set();
+
+function genToken() { return crypto.randomBytes(24).toString('hex'); }
+
+function parseCookies(cookieHeader) {
+  const out = {};
+  if (!cookieHeader) return out;
+  for (const part of cookieHeader.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k) out[k.trim()] = decodeURIComponent(v.join('='));
+  }
+  return out;
+}
+
+function isAuthenticated(req) {
+  if (!AUTH_ENABLED) return true;
+  const cookies = parseCookies(req.headers.cookie);
+  return activeSessions.has(cookies['hs_session']);
+}
+
+const LOGIN_PAGE = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>hackerspace — login</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{--bg:#0a0a0f;--panel:#111118;--border:#2a2a3a;--text:#e2e2f0;--muted:#6b6b8a;--accent:#7c6aff;--red:#ff5555}
+  body{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace,monospace;display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .box{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:2.5rem 2rem;width:100%;max-width:360px}
+  h1{font-size:1.1rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:1.8rem;color:var(--accent)}
+  label{display:block;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem}
+  input{width:100%;background:#0d0d14;border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:.9rem;padding:.6rem .8rem;margin-bottom:1.2rem;outline:none;transition:border-color .15s}
+  input:focus{border-color:var(--accent)}
+  button{width:100%;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-family:inherit;font-size:.9rem;font-weight:600;padding:.7rem;letter-spacing:.06em;transition:opacity .15s}
+  button:hover{opacity:.85}
+  .err{color:var(--red);font-size:.8rem;margin-top:1rem;text-align:center;min-height:1.2em}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>hackerspace</h1>
+  <form method="POST" action="/login">
+    <label for="u">username</label>
+    <input id="u" name="username" type="text" autocomplete="username" required autofocus>
+    <label for="p">password</label>
+    <input id="p" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">sign in</button>
+    <div class="err">{{ERROR}}</div>
+  </form>
+</div>
+</body>
+</html>`;
+
 const sessionsDir = path.join(__dirname, 'sessions');
 function sessionFile(root) {
   const hash = crypto.createHash('md5').update(path.resolve(root)).digest('hex').slice(0, 12);
@@ -176,9 +235,43 @@ function tabByName(name) { return tabs.find(t => t.name === name); }
 // --- Express / WebSocket ---
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, maxPayload: 50 * 1024 * 1024 });
+const wss = new WebSocketServer({
+  server,
+  maxPayload: 50 * 1024 * 1024,
+  verifyClient: ({ req }) => {
+    if (!AUTH_ENABLED) return true;
+    const cookies = parseCookies(req.headers.cookie);
+    return activeSessions.has(cookies['hs_session']);
+  },
+});
 
 app.use(express.json({ limit: '50mb' }));
+
+// --- Login routes (no auth required) ---
+app.get('/login', (req, res) => {
+  if (isAuthenticated(req)) return res.redirect('/');
+  res.send(LOGIN_PAGE.replace('{{ERROR}}', ''));
+});
+
+app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
+  const { username, password } = req.body || {};
+  if (AUTH_ENABLED && username === LOGIN_USER && password === LOGIN_PASS) {
+    const token = genToken();
+    activeSessions.add(token);
+    res.setHeader('Set-Cookie', `hs_session=${token}; HttpOnly; Path=/; SameSite=Strict`);
+    return res.redirect('/');
+  }
+  res.status(401).send(LOGIN_PAGE.replace('{{ERROR}}', 'Invalid credentials'));
+});
+
+// --- Auth middleware (gates all routes below, including static files) ---
+if (AUTH_ENABLED) {
+  app.use((req, res, next) => {
+    if (isAuthenticated(req)) return next();
+    res.status(401).send(LOGIN_PAGE.replace('{{ERROR}}', ''));
+  });
+}
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Process control ---
