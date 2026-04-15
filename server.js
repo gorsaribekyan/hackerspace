@@ -64,14 +64,14 @@ const LOGIN_PAGE = `<!DOCTYPE html>
 <title>hackerspace — login</title>
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-  :root{--bg:#0a0a0f;--panel:#111118;--border:#2a2a3a;--text:#e2e2f0;--muted:#6b6b8a;--accent:#7c6aff;--red:#ff5555}
+  :root{--bg:#000a00;--panel:#001a00;--border:#1a4a1a;--text:#a8ffb0;--muted:#3a7a3a;--accent:#00ff41;--red:#ff5555}
   body{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace,monospace;display:flex;align-items:center;justify-content:center;min-height:100vh}
   .box{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:2.5rem 2rem;width:100%;max-width:360px}
   h1{font-size:1.1rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:1.8rem;color:var(--accent)}
   label{display:block;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem}
-  input{width:100%;background:#0d0d14;border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:.9rem;padding:.6rem .8rem;margin-bottom:1.2rem;outline:none;transition:border-color .15s}
+  input{width:100%;background:#000d00;border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:.9rem;padding:.6rem .8rem;margin-bottom:1.2rem;outline:none;transition:border-color .15s}
   input:focus{border-color:var(--accent)}
-  button{width:100%;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-family:inherit;font-size:.9rem;font-weight:600;padding:.7rem;letter-spacing:.06em;transition:opacity .15s}
+  button{width:100%;background:var(--accent);border:none;border-radius:6px;color:#000;cursor:pointer;font-family:inherit;font-size:.9rem;font-weight:600;padding:.7rem;letter-spacing:.06em;transition:opacity .15s}
   button:hover{opacity:.85}
   .err{color:var(--red);font-size:.8rem;margin-top:1rem;text-align:center;min-height:1.2em}
 </style>
