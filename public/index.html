@@ -1280,6 +1280,7 @@ function applyTheme(id, animate) {
   localStorage.setItem('theme', id);
   document.getElementById('theme-label').textContent = theme.label;
   renderThemeDropdown();
+  if (root) debouncedSave();
 }
 
 function renderThemeDropdown() {
@@ -1348,6 +1349,154 @@ function getAgent(id) {
   return agentState.get(id);
 }
 
+// --- Session persistence (server-side, sessions/<name>-<hash>.json) ---
+const _pendingFileRestore = new Map();
+const _pendingShellRestore = new Map();
+let _saveTimer = null;
+
+const _cmdDrafts = new Map();
+
+function buildSessionPayload() {
+  const session = {
+    selectedTab: null, chatHistory: {}, openFiles: {}, shellOpen,
+    shellTabs: {}, agentSettings: {}, cmdDrafts: {},
+    theme: currentTheme, layout: currentLayout,
+    splitWidth: localStorage.getItem('splitWidth') || null,
+  };
+
+  if (selectedTabId !== null) {
+    const tab = tabs.find(t => t.id === selectedTabId);
+    if (tab) session.selectedTab = tab.name;
+    _cmdDrafts.set(selectedTabId, document.getElementById('cmd-input').value);
+  }
+
+  saveCurrentFileState();
+  if (selectedTabId !== null) {
+    tabOpenFiles.set(selectedTabId, { active: openFilePath, files: new Map(editorFiles) });
+  }
+
+  for (const [id, state] of agentState) {
+    const tab = tabs.find(t => t.id === id);
+    if (!tab) continue;
+    if (state.termLines.length > 0) {
+      session.chatHistory[tab.name] = state.termLines.slice(-300).map(l => ({
+        text: l.text, cls: l.cls, ts: l.ts
+      }));
+    }
+    session.agentSettings[tab.name] = { model: state.model, mode: state.mode };
+  }
+
+  for (const [id, saved] of tabOpenFiles) {
+    const tab = tabs.find(t => t.id === id);
+    if (!tab || !saved.files || saved.files.size === 0) continue;
+    session.openFiles[tab.name] = {
+      active: saved.active,
+      files: [...saved.files.keys()],
+    };
+  }
+
+  for (const [id, proj] of subprojectTermTabs) {
+    const tab = tabs.find(t => t.id === id);
+    if (!tab || proj.list.length === 0) continue;
+    session.shellTabs[tab.name] = { count: proj.list.length, activeIndex: proj.list.indexOf(proj.active) };
+  }
+
+  for (const [id, draft] of _cmdDrafts) {
+    const tab = tabs.find(t => t.id === id);
+    if (tab && draft) session.cmdDrafts[tab.name] = draft;
+  }
+
+  return session;
+}
+
+function saveSession() {
+  if (!root) return;
+  wsSend({ type: 'save_session', data: buildSessionPayload() });
+}
+
+function saveSessionSync() {
+  if (!root) return;
+  try {
+    navigator.sendBeacon('/session', new Blob(
+      [JSON.stringify(buildSessionPayload())],
+      { type: 'application/json' }
+    ));
+  } catch (e) {}
+}
+
+function debouncedSave() {
+  if (_saveTimer) return;
+  _saveTimer = setTimeout(() => { _saveTimer = null; saveSession(); }, 2000);
+}
+
+function restoreSession(session) {
+  if (!session) return;
+
+  if (session.theme && session.theme !== currentTheme) {
+    applyTheme(session.theme, false);
+  }
+  if (session.layout) {
+    setLayout(session.layout);
+  }
+  if (session.splitWidth) {
+    localStorage.setItem('splitWidth', session.splitWidth);
+    if (session.layout === 'split') {
+      const fp = document.getElementById('files-pane');
+      if (fp) fp.style.width = session.splitWidth;
+    }
+  }
+
+  if (session.agentSettings) {
+    for (const [name, settings] of Object.entries(session.agentSettings)) {
+      const tab = tabs.find(t => t.name === name);
+      if (tab) {
+        const s = getAgent(tab.id);
+        if (settings.model) s.model = settings.model;
+        if (settings.mode) s.mode = settings.mode;
+      }
+    }
+  }
+
+  if (session.cmdDrafts) {
+    for (const [name, draft] of Object.entries(session.cmdDrafts)) {
+      const tab = tabs.find(t => t.name === name);
+      if (tab && draft) _cmdDrafts.set(tab.id, draft);
+    }
+  }
+
+  if (session.shellTabs) {
+    for (const [name, info] of Object.entries(session.shellTabs)) {
+      const tab = tabs.find(t => t.name === name);
+      if (tab && info.count > 0) {
+        _pendingShellRestore.set(tab.id, info);
+      }
+    }
+  }
+
+  let targetTabId = null;
+  if (session.selectedTab) {
+    const tab = tabs.find(t => t.name === session.selectedTab);
+    if (tab) targetTabId = tab.id;
+  }
+
+  if (session.openFiles) {
+    for (const [name, info] of Object.entries(session.openFiles)) {
+      const tab = tabs.find(t => t.name === name);
+      if (tab && info.files && info.files.length > 0) {
+        _pendingFileRestore.set(tab.id, { active: info.active, files: info.files });
+      }
+    }
+  }
+
+  if (targetTabId !== null) {
+    selectTab(targetTabId);
+  }
+
+  if (session.shellOpen && !shellOpen) {
+    toggleShell();
+  }
+}
+
 // WS
 function wsSend(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
 
@@ -1376,8 +1525,11 @@ function handleWSMessage(msg) {
       document.getElementById('root-name').textContent = rootName;
       renderTabs();
       if (!selectedTabId || !tabs.find(t => t.id === selectedTabId)) {
-        const first = tabs.find(t => !t.hidden) || tabs[0];
-        if (first) selectTab(first.id);
+        restoreSession(msg.session || null);
+        if (!selectedTabId || !tabs.find(t => t.id === selectedTabId)) {
+          const first = tabs.find(t => !t.hidden) || tabs[0];
+          if (first) selectTab(first.id);
+        }
       }
       break;
     }
@@ -1569,6 +1721,7 @@ function setLayout(mode) {
     b.classList.toggle('active', b.dataset.mode === mode);
   });
   if (mode !== 'chat') loadFileTree();
+  if (root) debouncedSave();
 }
 
 async function loadFileTree() {
@@ -1798,6 +1951,7 @@ async function openFile(filePath) {
     renderEditorTabs();
     const ta = document.getElementById('editor-textarea');
     ta.focus();
+    debouncedSave();
   } catch (e) { showAlert('Failed to open file: ' + e.message, 'Error'); }
 }
 
@@ -2144,6 +2298,25 @@ function showTerminal(entry) {
 }
 
 function showTerminalForTab(subTabId) {
+  const pendingShell = _pendingShellRestore.get(subTabId);
+  if (pendingShell) {
+    _pendingShellRestore.delete(subTabId);
+    const proj = getTermTabsForProject(subTabId);
+    if (proj.list.length === 0) {
+      for (let i = 0; i < pendingShell.count; i++) {
+        const idx = termIdCounter++;
+        proj.list.push(idx);
+        createTerminal(subTabId, idx);
+      }
+      const targetIdx = pendingShell.activeIndex >= 0 && pendingShell.activeIndex < proj.list.length
+        ? pendingShell.activeIndex : 0;
+      proj.active = proj.list[targetIdx];
+      renderShellTabs();
+      const e = allTerminals.get(ptyId(subTabId, proj.active));
+      if (e) showTerminal(e);
+      return;
+    }
+  }
   const proj = getTermTabsForProject(subTabId);
   if (proj.list.length === 0) {
     addShellTab();
@@ -2270,7 +2443,9 @@ setLayout(currentLayout);
 
 function selectTab(id) {
   if (id === selectedTabId) return;
+  const cmdInput = document.getElementById('cmd-input');
   if (selectedTabId !== null) {
+    _cmdDrafts.set(selectedTabId, cmdInput.value);
     saveCurrentFileState();
     tabOpenFiles.set(selectedTabId, { active: openFilePath, files: new Map(editorFiles) });
   }
@@ -2299,8 +2474,42 @@ function selectTab(id) {
       renderEditorTabs();
     }
   }
-  if (shellOpen) showTerminalForTab(id);
-  document.getElementById('cmd-input').focus();
+
+  const pendingShell = _pendingShellRestore.get(id);
+  if (pendingShell && shellOpen) {
+    _pendingShellRestore.delete(id);
+    const proj = getTermTabsForProject(id);
+    if (proj.list.length === 0) {
+      for (let i = 0; i < pendingShell.count; i++) {
+        const idx = termIdCounter++;
+        proj.list.push(idx);
+        createTerminal(id, idx);
+      }
+      const targetIdx = pendingShell.activeIndex >= 0 && pendingShell.activeIndex < proj.list.length
+        ? pendingShell.activeIndex : 0;
+      proj.active = proj.list[targetIdx];
+      renderShellTabs();
+      const entry = allTerminals.get(ptyId(id, proj.active));
+      if (entry) showTerminal(entry);
+    }
+  } else if (shellOpen) {
+    showTerminalForTab(id);
+  }
+
+  const pending = _pendingFileRestore.get(id);
+  if (pending && pending.files.length > 0 && currentLayout !== 'chat') {
+    _pendingFileRestore.delete(id);
+    (async () => {
+      for (const fp of pending.files) await openFile(fp);
+      if (pending.active && editorFiles.has(pending.active)) switchEditorTab(pending.active);
+    })();
+  }
+
+  cmdInput.value = _cmdDrafts.get(id) || '';
+  cmdInput.style.height = 'auto';
+  cmdInput.style.height = Math.min(cmdInput.scrollHeight, 240) + 'px';
+  cmdInput.focus();
+  debouncedSave();
 }
 
 // RENDERING (ported)
@@ -2531,6 +2740,7 @@ function pushLine(id, text, cls, ts, rawHTML) {
   s.termLines.push({ text, cls, ts, rawHTML: !!rawHTML });
   if (s.termLines.length > 500) s.termLines = s.termLines.slice(-400);
   if (id === selectedTabId) appendLineToDOM(text, cls, ts, rawHTML);
+  debouncedSave();
 }
 
 function appendDelta(id, text) {
@@ -2996,6 +3206,7 @@ function setModel(val) {
   s.model = val;
   localStorage.setItem('model', val);
   updateContextBar();
+  debouncedSave();
 }
 function setMode(val) {
   if (selectedTabId === null) return;
@@ -3003,6 +3214,7 @@ function setMode(val) {
   s.mode = val;
   localStorage.setItem('mode', val);
   updateStatusBar();
+  debouncedSave();
 }
 
 function stopAgent() {
@@ -3375,6 +3587,8 @@ tickSysStats();
 setInterval(tickSysStats, 3000);
 setInterval(tickGitStatus, 5000);
 updateAuthBadge();
+setInterval(saveSession, 30000);
+window.addEventListener('beforeunload', saveSessionSync);
 </script>
 </body>
 </html>

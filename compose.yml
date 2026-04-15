@@ -1,0 +1,16 @@
+services:
+  hackerspace:
+    image: hackerspace:latest
+    container_name: hackerspace
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+        PORT: "3000"
+        HOST: "0.0.0.0"
+    restart: unless-stopped
+    volumes:
+      - ./projects.json:/app/projects.json
+      - ./sessions:/app/sessions
+      - ./workspace:/app/workspace
+ 

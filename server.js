@@ -31,6 +31,13 @@ if (!fs.existsSync(currentRoot) || !fs.statSync(currentRoot).isDirectory()) {
 // --- Project config (per-root, stored in <root>/.hackerspace/config.json) ---
 function hackspaceDir(root) { return path.join(root, '.hackerspace'); }
 function configFile(root) { return path.join(hackspaceDir(root), 'config.json'); }
+const crypto = require('crypto');
+const sessionsDir = path.join(__dirname, 'sessions');
+function sessionFile(root) {
+  const hash = crypto.createHash('md5').update(path.resolve(root)).digest('hex').slice(0, 12);
+  const name = path.basename(root).replace(/[^a-zA-Z0-9_-]/g, '_');
+  return path.join(sessionsDir, `${name}-${hash}.json`);
+}
 
 function loadProjectConfig(root) {
   try { return JSON.parse(fs.readFileSync(configFile(root), 'utf-8')); }
@@ -42,6 +49,47 @@ function saveProjectConfig(root, cfg) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(configFile(root), JSON.stringify(cfg, null, 2), 'utf-8');
   } catch (e) { debug('[config] save failed:', e.message); }
+}
+
+// --- Session persistence (stored in <serverdir>/sessions/<name>-<hash>.json) ---
+function loadSession(root) {
+  try {
+    const data = JSON.parse(fs.readFileSync(sessionFile(root), 'utf-8'));
+    return {
+      selectedTab: data.selectedTab || null,
+      chatHistory: data.chatHistory || {},
+      openFiles: data.openFiles || {},
+      shellOpen: !!data.shellOpen,
+      shellTabs: data.shellTabs || {},
+      agentSettings: data.agentSettings || {},
+      cmdDrafts: data.cmdDrafts || {},
+      theme: data.theme || null,
+      layout: data.layout || null,
+      splitWidth: data.splitWidth || null,
+      savedAt: data.savedAt || 0,
+    };
+  } catch (e) {
+    return { selectedTab: null, chatHistory: {}, openFiles: {}, shellOpen: false, shellTabs: {}, agentSettings: {}, cmdDrafts: {}, theme: null, layout: null, splitWidth: null, savedAt: 0 };
+  }
+}
+
+function saveSession(root, data) {
+  try {
+    if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(sessionFile(root), JSON.stringify(data), 'utf-8');
+  } catch (e) { debug('[session] save failed:', e.message); }
+}
+
+function mergeAgentHistory(root) {
+  const session = loadSession(root);
+  for (const [id, agent] of agents) {
+    const tab = tabById(id);
+    if (!tab || agent.outputBuffer.length === 0) continue;
+    session.chatHistory[tab.name] = agent.outputBuffer.slice(-300).map(l => ({
+      text: l.text, cls: l.cls, ts: l.ts
+    }));
+  }
+  saveSession(root, session);
 }
 
 // --- Projects registry (stored in <appdir>/projects.json) ---
@@ -164,6 +212,7 @@ app.post('/switch-root', (req, res) => {
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
     return res.status(400).json({ ok: false, error: 'not a directory' });
   }
+  mergeAgentHistory(currentRoot);
   for (const [, agent] of agents) if (agent.process) killProc(agent.process.pid);
   agents.clear();
   for (const [, ds] of devServers) if (ds.process) killProc(ds.process.pid);
@@ -482,6 +531,32 @@ app.post('/agent-prompt', (req, res) => {
   res.json({ ok: true });
 });
 
+// --- HTTP: session persistence ---
+app.get('/session', (req, res) => {
+  const session = loadSession(currentRoot);
+  res.json(session);
+});
+
+app.post('/session', (req, res) => {
+  const data = req.body;
+  if (!data || typeof data !== 'object') return res.status(400).json({ ok: false, error: 'invalid body' });
+  const session = {
+    selectedTab: data.selectedTab || null,
+    chatHistory: data.chatHistory || {},
+    openFiles: data.openFiles || {},
+    shellOpen: !!data.shellOpen,
+    shellTabs: data.shellTabs || {},
+    agentSettings: data.agentSettings || {},
+    cmdDrafts: data.cmdDrafts || {},
+    theme: data.theme || null,
+    layout: data.layout || null,
+    splitWidth: data.splitWidth || null,
+    savedAt: Date.now(),
+  };
+  saveSession(currentRoot, session);
+  res.json({ ok: true });
+});
+
 // --- Agent lifecycle ---
 function broadcast(msg) {
   const data = JSON.stringify(msg);
@@ -715,11 +790,13 @@ function sleepAgent(id) {
 // --- WebSocket ---
 wss.on('connection', (ws) => {
   buildTabs();
+  const session = loadSession(currentRoot);
   ws.send(JSON.stringify({
     type: 'root_changed',
     root: currentRoot,
     rootName: getProjectName(currentRoot),
     tabs: tabsPublic(),
+    session,
   }));
   for (const tab of tabs) {
     const info = getAgentInfo(tab.id);
@@ -728,6 +805,8 @@ wss.on('connection', (ws) => {
     if (agent && agent.cwd) ws.send(JSON.stringify({ type: 'agent_cwd', id: tab.id, cwd: agent.cwd }));
     if (agent && agent.outputBuffer.length > 0) {
       ws.send(JSON.stringify({ type: 'agent_history', id: tab.id, lines: agent.outputBuffer }));
+    } else if (session.chatHistory && session.chatHistory[tab.name] && session.chatHistory[tab.name].length > 0) {
+      ws.send(JSON.stringify({ type: 'agent_history', id: tab.id, lines: session.chatHistory[tab.name] }));
     }
     if (agent && (agent.lastUsage || agent.lastModel)) {
       ws.send(JSON.stringify({
@@ -757,6 +836,34 @@ wss.on('connection', (ws) => {
           a.outputBuffer = [];
           a.currentDelta = '';
           a.lastTextOutput = null;
+        }
+        const clearTab = tabById(msg.id);
+        if (clearTab) {
+          const s = loadSession(currentRoot);
+          delete s.chatHistory[clearTab.name];
+          saveSession(currentRoot, s);
+        }
+        break;
+      }
+      case 'save_session': {
+        if (msg.data && typeof msg.data === 'object') {
+          const existing = loadSession(currentRoot);
+          existing.selectedTab = msg.data.selectedTab ?? existing.selectedTab;
+          existing.openFiles = msg.data.openFiles ?? existing.openFiles;
+          existing.shellOpen = msg.data.shellOpen ?? existing.shellOpen;
+          existing.shellTabs = msg.data.shellTabs ?? existing.shellTabs;
+          existing.agentSettings = msg.data.agentSettings ?? existing.agentSettings;
+          existing.cmdDrafts = msg.data.cmdDrafts ?? existing.cmdDrafts;
+          existing.theme = msg.data.theme ?? existing.theme;
+          existing.layout = msg.data.layout ?? existing.layout;
+          existing.splitWidth = msg.data.splitWidth ?? existing.splitWidth;
+          if (msg.data.chatHistory) {
+            for (const [name, lines] of Object.entries(msg.data.chatHistory)) {
+              existing.chatHistory[name] = lines;
+            }
+          }
+          existing.savedAt = Date.now();
+          saveSession(currentRoot, existing);
         }
         break;
       }
@@ -971,11 +1078,15 @@ app.get('/dev-server-status', (req, res) => {
 // --- Start ---
 buildTabs();
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '127.0.0.1', () => {
+const HOST = process.env.HOST || '127.0.0.1';
+server.listen(PORT, HOST, () => {
   console.log(`\n  hackerspace  —  ${path.basename(currentRoot)}  —  http://localhost:${PORT}\n  root: ${currentRoot}\n  tabs: ${tabs.filter(t => !t.hidden).length} visible, ${tabs.filter(t => t.hidden).length} hidden\n`);
 });
 
+setInterval(() => mergeAgentHistory(currentRoot), 30000);
+
 function shutdown() {
+  mergeAgentHistory(currentRoot);
   for (const [, agent] of agents) if (agent.process) killProc(agent.process.pid);
   for (const [, ds] of devServers) if (ds.process) killProc(ds.process.pid);
   process.exit(0);
