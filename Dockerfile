@@ -7,8 +7,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SHELL=/usr/bin/fish \
     IS_SANDBOX=1
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN apt-get update --fix-missing \
+    && apt-get install -y --fix-missing --no-install-recommends \
         ca-certificates \
         curl \
         git \
