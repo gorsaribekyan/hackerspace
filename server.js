@@ -110,6 +110,19 @@ function saveProjectConfig(root, cfg) {
   } catch (e) { debug('[config] save failed:', e.message); }
 }
 
+function tasksFile(root) { return path.join(hackspaceDir(root), 'tasks.json'); }
+function loadTasks(root) {
+  try { return JSON.parse(fs.readFileSync(tasksFile(root), 'utf-8')); }
+  catch (e) { return []; }
+}
+function saveTasks(root, tasks) {
+  try {
+    const dir = hackspaceDir(root);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(tasksFile(root), JSON.stringify(tasks, null, 2), 'utf-8');
+  } catch (e) { debug('[tasks] save failed:', e.message); }
+}
+
 // --- Session persistence (stored in <serverdir>/sessions/<name>-<hash>.json) ---
 function loadSession(root) {
   try {
@@ -1172,6 +1185,51 @@ app.get('/dev-server-status', (req, res) => {
   const ds = devServers.get(key);
   if (!ds) return res.json({ status: 'off', port: null, cwd });
   res.json({ status: ds.status, port: ds.port, cwd: ds.cwd });
+});
+
+// --- HTTP: tasks ---
+app.get('/tasks', (req, res) => {
+  res.json({ tasks: loadTasks(currentRoot) });
+});
+
+app.post('/tasks', (req, res) => {
+  const { title } = req.body || {};
+  if (!title || typeof title !== 'string' || !title.trim()) {
+    return res.status(400).json({ ok: false, error: 'title required' });
+  }
+  const tasks = loadTasks(currentRoot);
+  const task = {
+    id: crypto.randomBytes(8).toString('hex'),
+    title: title.trim(),
+    status: 'todo',
+    createdAt: Date.now(),
+  };
+  tasks.push(task);
+  saveTasks(currentRoot, tasks);
+  res.json({ ok: true, task });
+});
+
+app.put('/tasks/:id', (req, res) => {
+  const { id } = req.params;
+  const { title, status } = req.body || {};
+  const tasks = loadTasks(currentRoot);
+  const idx = tasks.findIndex(t => t.id === id);
+  if (idx === -1) return res.status(404).json({ ok: false, error: 'not found' });
+  if (title !== undefined && typeof title === 'string' && title.trim()) tasks[idx].title = title.trim();
+  if (status !== undefined && ['todo', 'in-progress', 'done'].includes(status)) tasks[idx].status = status;
+  tasks[idx].updatedAt = Date.now();
+  saveTasks(currentRoot, tasks);
+  res.json({ ok: true, task: tasks[idx] });
+});
+
+app.delete('/tasks/:id', (req, res) => {
+  const { id } = req.params;
+  let tasks = loadTasks(currentRoot);
+  const before = tasks.length;
+  tasks = tasks.filter(t => t.id !== id);
+  if (tasks.length === before) return res.status(404).json({ ok: false, error: 'not found' });
+  saveTasks(currentRoot, tasks);
+  res.json({ ok: true });
 });
 
 // --- Start ---

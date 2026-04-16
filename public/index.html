@@ -923,6 +923,54 @@
   .limit-section { margin: 10px 0 6px; font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
   .limit-info { color: var(--muted); font-size: 11px; padding: 2px 0; }
 
+  /* TASKS */
+  .tasks-add-row { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tasks-add-row input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); padding: 7px 10px; border-radius: 4px; outline: none; font: inherit; font-size: 12px;
+  }
+  .tasks-add-row input:focus { border-color: var(--accent-dim); }
+  .tasks-add-btn {
+    background: var(--panel-2); border: 1px solid var(--accent-dim); color: var(--accent);
+    padding: 7px 14px; border-radius: 4px; font-size: 11px; white-space: nowrap; letter-spacing: 0.3px;
+  }
+  .tasks-add-btn:hover { background: rgba(122, 162, 247, 0.1); }
+  .tasks-section { margin-bottom: 10px; }
+  .tasks-section-label {
+    font-size: 10px; color: var(--muted-2); text-transform: uppercase; letter-spacing: 1px;
+    padding: 4px 0 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .tasks-section-count { background: var(--panel-2); padding: 1px 5px; border-radius: 3px; font-size: 10px; color: var(--muted); }
+  .tasks-empty { color: var(--muted-2); font-size: 11px; padding: 10px 4px; font-style: italic; text-align: center; }
+  .task-item { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 4px; border: 1px solid transparent; transition: background 0.1s; }
+  .task-item:hover { background: var(--panel-2); border-color: var(--border); }
+  .task-status-btn {
+    width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0;
+    border: 2px solid var(--muted-2); background: transparent; cursor: pointer;
+    position: relative; transition: all 0.15s; padding: 0;
+  }
+  .task-status-btn:hover { border-color: var(--accent); }
+  .task-status-btn.status-in-progress { border-color: var(--yellow); background: rgba(224,184,96,0.15); }
+  .task-status-btn.status-done { border-color: var(--green); background: var(--green); }
+  .task-status-btn.status-done::after {
+    content: '✓'; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    color: var(--bg); font-size: 9px; line-height: 1;
+  }
+  .task-title-input {
+    flex: 1; font-size: 12px; min-width: 0;
+    border: 1px solid transparent; padding: 2px 4px; border-radius: 3px;
+    background: transparent; outline: none; color: var(--text);
+  }
+  .task-title-input.done { text-decoration: line-through; color: var(--muted); }
+  .task-title-input:focus { border-color: var(--border); background: var(--bg); }
+  .task-del-btn {
+    opacity: 0; background: transparent; border: none; color: var(--muted);
+    font-size: 16px; padding: 0 4px; line-height: 1; border-radius: 2px; flex-shrink: 0; cursor: pointer;
+  }
+  .task-item:hover .task-del-btn { opacity: 0.5; }
+  .task-del-btn:hover { opacity: 1 !important; color: var(--red); }
+
   /* scrollbars */
   *::-webkit-scrollbar { width: 8px; height: 8px; }
   *::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
@@ -1174,6 +1222,7 @@
   </div>
   <div class="sb-divider"></div>
   <div class="sb-item sb-actions">
+    <button class="sb-btn" id="sb-tasks-btn" onclick="openTasks()" title="Project tasks">TASKS</button>
     <button class="sb-btn" id="sb-prompt-btn" onclick="openEditPrompt()" title="Edit system prompt">PROMPT</button>
     <button class="sb-btn" id="sb-init-btn" onclick="initAgent()" title="Compact context">INIT</button>
     <button class="sb-btn" id="sb-push-btn" onclick="gitPush()" title="Commit &amp; push">PUSH</button>
@@ -1233,6 +1282,21 @@
   <div class="modal-actions">
     <button class="modal-btn" onclick="closeModals()">CLOSE</button>
     <button class="modal-btn primary" onclick="saveApiKey()">SAVE KEY</button>
+  </div>
+</div>
+
+<div class="modal" id="tasks-modal" style="min-width:560px;max-width:680px;">
+  <h2 style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+    <span>tasks</span>
+    <span id="tasks-count-badge" style="font-size:11px;color:var(--muted);font-weight:400;letter-spacing:0;"></span>
+  </h2>
+  <div class="tasks-add-row">
+    <input type="text" id="tasks-new-input" placeholder="New task…" onkeydown="if(event.key==='Enter')addTaskFromInput()">
+    <button class="tasks-add-btn" onclick="addTaskFromInput()">ADD</button>
+  </div>
+  <div id="tasks-list" style="max-height:420px;overflow-y:auto;"></div>
+  <div class="modal-actions" style="margin-top:14px;">
+    <button class="modal-btn primary" onclick="closeModals()">CLOSE</button>
   </div>
 </div>
 
@@ -1525,6 +1589,7 @@ function handleWSMessage(msg) {
       tabs = msg.tabs || [];
       document.getElementById('root-name').textContent = rootName;
       renderTabs();
+      fetchTasksBadge();
       if (!selectedTabId || !tabs.find(t => t.id === selectedTabId)) {
         restoreSession(msg.session || null);
         if (!selectedTabId || !tabs.find(t => t.id === selectedTabId)) {
@@ -3597,12 +3662,153 @@ cmdBar.addEventListener('drop', (e) => {
   for (const file of e.dataTransfer.files) attachFile(file);
 });
 
+// --- TASKS ---
+let tasksCache = [];
+
+async function fetchTasksBadge() {
+  try {
+    const r = await fetch('/tasks');
+    const data = await r.json();
+    tasksCache = data.tasks || [];
+    updateTasksBadge();
+  } catch (e) {}
+}
+
+function updateTasksBadge() {
+  const pending = tasksCache.filter(t => t.status !== 'done').length;
+  const btn = document.getElementById('sb-tasks-btn');
+  if (!btn) return;
+  btn.classList.toggle('pulse', pending > 0);
+  btn.textContent = pending > 0 ? `TASKS (${pending})` : 'TASKS';
+}
+
+async function openTasks() {
+  try {
+    const r = await fetch('/tasks');
+    const data = await r.json();
+    tasksCache = data.tasks || [];
+  } catch (e) {}
+  renderTasksList();
+  openModal('tasks-modal');
+  setTimeout(() => document.getElementById('tasks-new-input').focus(), 50);
+}
+
+function renderTasksList() {
+  const inProgress = tasksCache.filter(t => t.status === 'in-progress');
+  const todo = tasksCache.filter(t => t.status === 'todo');
+  const done = tasksCache.filter(t => t.status === 'done');
+  const pending = inProgress.length + todo.length;
+
+  const badge = document.getElementById('tasks-count-badge');
+  if (badge) badge.textContent = `${pending} pending · ${done.length} done`;
+  updateTasksBadge();
+
+  const list = document.getElementById('tasks-list');
+  if (!list) return;
+
+  if (tasksCache.length === 0) {
+    list.innerHTML = '<div class="tasks-empty">No tasks yet. Add one above.</div>';
+    return;
+  }
+
+  let html = '';
+  if (inProgress.length) html += renderTasksSection('in progress', inProgress);
+  if (todo.length) html += renderTasksSection('todo', todo);
+  if (done.length) html += renderTasksSection('done', done);
+  list.innerHTML = html;
+}
+
+function renderTasksSection(label, items) {
+  const rows = items.map(t =>
+    `<div class="task-item" data-id="${t.id}">` +
+    `<button class="task-status-btn status-${t.status}" onclick="cycleTaskStatus('${t.id}')" title="Cycle status (todo → in-progress → done)"></button>` +
+    `<input class="task-title-input${t.status === 'done' ? ' done' : ''}" value="${escapeHtml(t.title)}" ` +
+    `onblur="saveTaskTitle(this,'${t.id}')" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">` +
+    `<button class="task-del-btn" onclick="deleteTask('${t.id}')" title="Delete">×</button>` +
+    `</div>`
+  ).join('');
+  return `<div class="tasks-section">` +
+    `<div class="tasks-section-label">${label}<span class="tasks-section-count">${items.length}</span></div>` +
+    rows +
+    `</div>`;
+}
+
+async function addTaskFromInput() {
+  const input = document.getElementById('tasks-new-input');
+  const title = (input.value || '').trim();
+  if (!title) return;
+  try {
+    const r = await fetch('/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      tasksCache.push(data.task);
+      input.value = '';
+      renderTasksList();
+    }
+  } catch (e) {}
+}
+
+async function cycleTaskStatus(id) {
+  const task = tasksCache.find(t => t.id === id);
+  if (!task) return;
+  const next = { 'todo': 'in-progress', 'in-progress': 'done', 'done': 'todo' };
+  try {
+    const r = await fetch(`/tasks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: next[task.status] }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      const idx = tasksCache.findIndex(t => t.id === id);
+      if (idx !== -1) tasksCache[idx] = data.task;
+      renderTasksList();
+    }
+  } catch (e) {}
+}
+
+async function saveTaskTitle(input, id) {
+  const title = (input.value || '').trim();
+  const task = tasksCache.find(t => t.id === id);
+  if (!task) return;
+  if (!title) { input.value = task.title; return; }
+  if (task.title === title) return;
+  try {
+    const r = await fetch(`/tasks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      const idx = tasksCache.findIndex(t => t.id === id);
+      if (idx !== -1) tasksCache[idx] = data.task;
+    }
+  } catch (e) {}
+}
+
+async function deleteTask(id) {
+  try {
+    const r = await fetch(`/tasks/${id}`, { method: 'DELETE' });
+    const data = await r.json();
+    if (data.ok) {
+      tasksCache = tasksCache.filter(t => t.id !== id);
+      renderTasksList();
+    }
+  } catch (e) {}
+}
+
 // INIT
 connectWS();
 tickSysStats();
 setInterval(tickSysStats, 3000);
 setInterval(tickGitStatus, 5000);
 updateAuthBadge();
+fetchTasksBadge();
 setInterval(saveSession, 30000);
 window.addEventListener('beforeunload', saveSessionSync);
 </script>
