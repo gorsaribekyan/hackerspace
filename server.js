@@ -793,9 +793,13 @@ function sendCommand(id, text, model, mode, images, label) {
         for (const block of blocks) {
           if (block.type === 'text') {
             const formatted = `${tab.name}> ${block.text}`;
-            bufferPush(agent, { text: formatted, cls: 'term-text', ts: Date.now() });
-            agent.lastTextOutput = block.text.trim();
-            broadcast({ type: 'agent_output', id, text: formatted, done: false, format: 'text' });
+            // If delta streaming already showed this text, skip to avoid a duplicate
+            // COPY button in the UI (result handler will buffer the delta instead).
+            if (!agent.currentDelta) {
+              bufferPush(agent, { text: formatted, cls: 'term-text', ts: Date.now() });
+              agent.lastTextOutput = block.text.trim();
+              broadcast({ type: 'agent_output', id, text: formatted, done: false, format: 'text' });
+            }
           } else if (block.type === 'tool_use') {
             const toolName = block.name || 'unknown';
             let toolInfo = `${tab.name} [tool]> ${toolName}`;
